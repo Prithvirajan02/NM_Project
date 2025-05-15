@@ -2,17 +2,19 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import re
-import subprocess
-import sys
-import spacy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 
+
+import spacy
+import subprocess
+import sys
 # Load SpaCy English model
 # nlp = spacy.load("en_core_web_sm")
 try:
     nlp = spacy.load("en_core_web_sm")
 except OSError:
+    # If not installed, download the model
     subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
     nlp = spacy.load("en_core_web_sm")
 
