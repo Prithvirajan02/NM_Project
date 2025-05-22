@@ -1,0 +1,305 @@
+import tkinter as tk
+from ttkbootstrap import Style
+from ttkbootstrap import ttk
+import threading
+import webbrowser
+import pyttsx3
+import speech_recognition as sr
+import requests
+import randfacts
+import wikipedia
+import time
+import os
+import platform
+import subprocess
+import difflib
+import cv2
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from datetime import datetime
+from PIL import Image, ImageTk
+
+
+class VoiceAssistantGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Whiteheart Voice Assistant")
+        self.root.geometry("900x800")
+        self.style = Style(theme="cyborg")
+
+        self.engine = pyttsx3.init()
+        self.engine.setProperty('rate', 165)
+        voices = self.engine.getProperty('voices')
+        self.engine.setProperty('voice', voices[1].id if len(voices) > 1 else voices[0].id)
+
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+
+        ttk.Label(root, text="🤖 Whiteheart Voice Assistant", font=("Helvetica", 20, "bold"), bootstyle="info").pack(pady=20)
+
+        self.text_user = tk.Text(root, height=3, wrap='word', font=("Helvetica", 12))
+        self.text_user.pack(fill='x', padx=10, pady=5)
+
+        self.text_assistant = tk.Text(root, height=12, wrap='word', font=("Helvetica", 11))
+        self.text_assistant.pack(fill='both', expand=True, padx=10, pady=5)
+
+        self.scrollbar = ttk.Scrollbar(self.text_assistant, orient="vertical", command=self.text_assistant.yview)
+        self.text_assistant.config(yscrollcommand=self.scrollbar.set)
+        self.scrollbar.pack(side="right", fill="y")
+
+        self.mic_label = ttk.Label(root)
+        self.mic_label.pack(pady=10)
+
+        self.mic_image = Image.open("mic.png")
+        self.pulse_direction = 1
+        self.pulse_size = 50
+        self.animate_mic()
+
+        self.listening = True
+        self.speaking = False
+        self.trigger_words = ["whiteheart", "white heart", "white-hart", "whitheart", "whitehat"]
+        self.last_command = ""
+        self.last_time = 0
+        self.cooldown = 3
+
+        with self.microphone as source:
+            self.recognizer.adjust_for_ambient_noise(source)
+
+        self.stop_listening = self.recognizer.listen_in_background(
+            self.microphone, self.callback, phrase_time_limit=6
+        )
+
+        self.root.after(100, lambda: threading.Thread(
+            target=self.speak,
+            args=("Hello, I am Whiteheart, your voice assistant. How can I help you today?",),
+            daemon=True
+        ).start())
+
+    def animate_mic(self):
+        self.pulse_size += self.pulse_direction
+        if self.pulse_size >= 60 or self.pulse_size <= 50:
+            self.pulse_direction *= -1
+        img = self.mic_image.resize((self.pulse_size, self.pulse_size))
+        self.mic_photo = ImageTk.PhotoImage(img)
+        self.mic_label.configure(image=self.mic_photo)
+        self.root.after(100, self.animate_mic)
+
+    def is_triggered(self, command):
+        words = command.split()
+        for word in words[:2]:
+            for trigger in self.trigger_words:
+                ratio = difflib.SequenceMatcher(None, word.lower(), trigger.lower()).ratio()
+                if ratio > 0.75:
+                    return True
+        return False
+
+    def remove_trigger(self, command):
+        for trigger in self.trigger_words:
+            if trigger in command.lower():
+                return command.lower().replace(trigger, "").strip()
+        return command
+
+    def callback(self, recognizer, audio):
+        if self.speaking:
+            return
+        try:
+            command = recognizer.recognize_google(audio).lower()
+            current_time = time.time()
+
+            if command == self.last_command and (current_time - self.last_time) < self.cooldown:
+                return
+
+            self.last_command = command
+            self.last_time = current_time
+
+            if self.is_triggered(command):
+                command = self.remove_trigger(command)
+                self.root.after(0, lambda: self.update_user_text(command))
+                self.root.after(0, lambda: self.process_command(command))
+        except sr.UnknownValueError:
+            pass
+        except Exception as e:
+            print(f"Recognition error: {e}")
+
+    def update_user_text(self, command):
+        self.text_user.delete(1.0, tk.END)
+        self.text_user.insert(tk.END, command)
+
+    def speak(self, text):
+        def run_speech():
+            self.speaking = True
+            self.text_assistant.insert(tk.END, f"Whiteheart: {text}\n\n")
+            self.text_assistant.see(tk.END)
+            self.engine.say(text)
+            self.engine.runAndWait()
+            self.speaking = False
+
+        threading.Thread(target=run_speech, daemon=True).start()
+
+    def process_command(self, command):
+        if any(x in command for x in ["information", "tell me about", "who is", "what is"]):
+            topic = self.extract_topic(command, ["about", "on", "who is", "what is"])
+            self.get_wikipedia_info(topic)
+        elif any(x in command for x in ["video", "play", "youtube"]):
+            topic = self.extract_topic(command, ["video", "play", "youtube"])
+            self.play_youtube_video(topic)
+        elif any(x in command for x in ["calculate", "math", "what is"]):
+            expression = self.extract_topic(command, ["calculate", "math", "what is"])
+            self.calculate(expression)
+        elif "joke" in command:
+            self.tell_joke()
+        elif "fact" in command:
+            self.tell_fact()
+        elif "weather" in command:
+            city = self.extract_topic(command, ["weather"]) or "Chennai"
+            self.get_weather(city)
+        elif "stack overflow" in command or "stackoverflow" in command:
+            query = self.extract_topic(command, ["for", "about"])
+            self.search_stackoverflow(query)
+        elif any(x in command for x in ["open", "launch"]):
+            app_name = self.extract_topic(command, ["open", "launch"])
+            self.open_application(app_name)
+        elif "photo" in command or "capture" in command:
+            self.take_photo()
+        elif any(x in command for x in ["exit", "stop", "quit", "goodbye"]):
+            self.speak("Goodbye! Have a nice day.")
+            self.listening = False
+            self.stop_listening(wait_for_stop=False)
+            self.root.quit()
+        else:
+            self.speak("Sorry, I didn't understand that command.")
+
+    def extract_topic(self, command, keywords):
+        command = command.lower()
+        for keyword in keywords:
+            if keyword in command:
+                return command.split(keyword, 1)[1].strip()
+        return ""
+
+    def calculate(self, expression):
+        try:
+            result = str(eval(expression))
+            self.speak(f"The result is {result}")
+        except Exception:
+            self.speak("I couldn't calculate that expression.")
+
+    def get_wikipedia_info(self, topic):
+        if not topic:
+            self.speak("Please specify a topic to search.")
+            return
+        self.speak(f"Searching Wikipedia for {topic}")
+        try:
+            summary = wikipedia.summary(topic, sentences=1)
+            self.speak(summary)
+        except Exception:
+            self.speak("Sorry, I couldn't find information on Wikipedia.")
+
+    def play_youtube_video(self, topic):
+        if not topic:
+            self.speak("What would you like me to play on YouTube?")
+            return
+        try:
+            self.speak(f"Playing {topic} on YouTube")
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+            driver.get(f"https://www.youtube.com/results?search_query={topic.replace(' ', '+')}")
+            video = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "ytd-video-renderer #video-title"))
+            )
+            video.click()
+        except Exception as e:
+            self.speak("Could not play the video.")
+            print(f"Error: {e}")
+
+    def tell_joke(self):
+        try:
+            response = requests.get("https://official-joke-api.appspot.com/random_joke")
+            joke = response.json()
+            self.speak(joke["setup"])
+            time.sleep(2)
+            self.speak(joke["punchline"])
+        except Exception:
+            self.speak("Sorry, I couldn't fetch a joke right now.")
+
+    def tell_fact(self):
+        fact = randfacts.get_fact()
+        self.speak("Did you know that " + fact)
+
+    def get_weather(self, city):
+        try:
+            response = requests.get(f"https://wttr.in/{city}?format=3")
+            self.speak(f"The current weather in {city} is: {response.text}")
+        except Exception:
+            self.speak("Sorry, I couldn't fetch the weather info.")
+
+    def search_stackoverflow(self, query):
+        if not query:
+            self.speak("What would you like to search on Stack Overflow?")
+            return
+        self.speak(f"Searching Stack Overflow for {query}")
+        url = f"https://stackoverflow.com/search?q={query.replace(' ', '+')}"
+        webbrowser.open(url)
+
+    def open_application(self, app_name):
+        if not app_name:
+            self.speak("Please specify the application to open.")
+            return
+
+        self.speak(f"Trying to open {app_name}")
+        app_name = app_name.lower()
+        app_map = {
+            'chrome': 'chrome',
+            'firefox': 'firefox',
+            'notepad': 'notepad',
+            'calculator': 'calc',
+            'word': 'winword',
+            'excel': 'excel',
+            'vlc': 'vlc',
+            'spotify': 'Spotify',
+            'telegram': 'Telegram',
+            'discord': 'Discord',
+        }
+
+        executable = app_map.get(app_name, app_name)
+
+        try:
+            system = platform.system()
+            if system == "Windows":
+                subprocess.Popen([executable])
+            elif system == "Darwin":
+                subprocess.Popen(["open", "-a", executable])
+            else:
+                subprocess.Popen([executable])
+        except Exception:
+            self.speak(f"Sorry, I couldn't open {app_name}")
+
+    def take_photo(self):
+        self.speak("Taking a photo in 3 seconds.")
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            self.speak("Sorry, I couldn't access the camera.")
+            return
+
+        time.sleep(3)
+        ret, frame = cap.read()
+        if ret:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            photo_path = f"photo_{timestamp}.jpg"
+            cv2.imwrite(photo_path, frame)
+            self.speak(f"Photo taken and saved as {photo_path}.")
+        else:
+            self.speak("Failed to take photo.")
+        cap.release()
+
+
+def main():
+    root = tk.Tk()
+    app = VoiceAssistantGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
